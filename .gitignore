@@ -37,3 +37,7 @@ dist-ssr
 coverage/
 playwright-report/
 test-results/
+
+# Deployment tooling
+.vercel/
+.convex/

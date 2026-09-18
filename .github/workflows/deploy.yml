@@ -1,0 +1,58 @@
+name: Deploy production
+run-name: Deploy ${{ github.ref_name }} to jev.imprfct.dev
+
+on:
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: jevdokku-production
+  cancel-in-progress: false
+
+jobs:
+  deploy:
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    environment:
+      name: production
+      url: https://jev.imprfct.dev
+    env:
+      VERCEL_ORG_ID: ${{ vars.VERCEL_ORG_ID }}
+      VERCEL_PROJECT_ID: ${{ vars.VERCEL_PROJECT_ID }}
+    steps:
+      - uses: actions/checkout@v4
+      - uses: pnpm/action-setup@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: '24'
+          cache: pnpm
+      - name: Install dependencies
+        run: pnpm install --frozen-lockfile
+      - name: Check and test
+        run: |
+          pnpm check
+          pnpm test
+          pnpm exec tsc -p convex/tsconfig.json
+      - name: Install Vercel CLI
+        run: pnpm add --global vercel@59.23.2
+      - name: Build production frontend
+        env:
+          VERCEL_TOKEN: ${{ secrets.VERCEL_TOKEN }}
+        run: |
+          vercel pull --yes --environment=production --token="$VERCEL_TOKEN"
+          vercel build --prod --token="$VERCEL_TOKEN"
+      - name: Deploy production backend
+        env:
+          CONVEX_DEPLOY_KEY: ${{ secrets.CONVEX_DEPLOY_KEY }}
+        run: pnpm exec convex deploy
+      - name: Deploy production frontend
+        env:
+          VERCEL_TOKEN: ${{ secrets.VERCEL_TOKEN }}
+        run: vercel deploy --prebuilt --prod --yes --token="$VERCEL_TOKEN"
+      - name: Verify production endpoints
+        run: |
+          curl --fail --retry 5 --retry-delay 3 https://jev.imprfct.dev/
+          curl --fail --retry 5 --retry-delay 3 https://jev.imprfct.dev/api/config
+          curl --fail --retry 5 --retry-delay 3 https://jev.imprfct.dev/api/stats

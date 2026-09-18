@@ -1,68 +1,106 @@
 # jevdokku
 
-A Vite+ / React experiment with Jev 1.13. Visual styles follow Pixel and Imperfect Log: near-black surfaces, rose accents, Geist Mono and Geist Pixel.
+Watch Jev solve Sudoku, one batch at a time. Inspect its choices, compare probabilities, and replay the moves that worked—or led to a dead end.
 
-## Run
+[**Open the app → jev.imprfct.dev**](https://jev.imprfct.dev)
+
+An experiment built with React, TypeScript, Vite+, and [Jev 1.13](https://openrouter.ai/typesafe/jev-1.13) through OpenRouter.
+
+## Features
+
+- Generate puzzles with a unique solution, from 2×2 to 64×64.
+- Request up to 128 cell choices per batch, with probabilities for every possible value.
+- Inspect accepted moves, rejected choices, and backtracking on a zoomable board.
+- Replay recorded batches without making new model requests.
+- View request payloads, token usage, and reported costs; export runs as JSON.
+- Use a personal OpenRouter key or an optional shared server key.
+
+## Quick start
+
+Requires Node.js 24.11 or later in the 24.x series and pnpm 10.30.1.
 
 ```sh
-pnpm install
-pnpm run dev
+git clone https://github.com/imprfct-code/jevdokku.git
+cd jevdokku
+pnpm install --frozen-lockfile
+pnpm dev
 ```
 
-Open http://localhost:4444. Use `PORT` for another port.
+Open [localhost:4444](http://localhost:4444), connect an OpenRouter key in **Settings**, and start a run. Model requests require OpenRouter access and credits. Generating and exploring a board does not require a key.
 
-The server accepts either `OPEN-ROUTER-API-KEY` or `OPENROUTER_API_KEY` in `.env`. It connects automatically. The shared key stays on the server and only leaves it in the server-to-OpenRouter authorization header. It never enters browser requests, public API responses, run exports or the client bundle. Visitors can connect a personal key in Settings. It stays only in the current tab's memory. Personal requests go directly from the browser to OpenRouter with no cookies, server proxy, localStorage or sessionStorage. Disconnect or reload clears the key. Errors never fall back to shared funds. Request and response previews and exports omit credentials.
+To enable shared access, copy `.env.example` to `.env`, fill in the server key, and restart the development server:
 
 ```sh
-pnpm run check
-pnpm run build
-pnpm start
+cp .env.example .env
 ```
 
-Use `vp run dev`, not `vp dev`, to start both the app and local API with the global Vite+ CLI.
+Use `pnpm dev` or `vp run dev` to start both the interface and API. `vp dev` alone starts only the frontend.
 
-## Boards
+## Configuration
 
-Enter any integer side length from 2 to 64. A valid edit immediately regenerates the board. The app chooses the nearest factor pair for rectangular boxes: 12 uses 3×4, 25 uses 5×5, 32 uses 4×8. Prime sizes use 1×N boxes, which gives Latin-square constraints. Values display as decimal numbers.
+| Variable                         | Default                                             | Purpose                                                                         |
+| -------------------------------- | --------------------------------------------------- | ------------------------------------------------------------------------------- |
+| `OPENROUTER_API_KEY`             | Unset                                               | Server key for shared access. Local Express also accepts `OPEN-ROUTER-API-KEY`. |
+| `PUBLIC_DAILY_BUDGET_USD`        | `5`                                                 | Daily reported spending threshold in USD. `0` disables shared access.           |
+| `PUBLIC_REQUESTS_PER_MINUTE`     | `600`                                               | Shared request limit: site-wide in Convex, per IP in local Express.             |
+| `PUBLIC_MAX_CONCURRENT_REQUESTS` | `20`                                                | Simultaneous shared requests, configurable from 1 to 100.                       |
+| `ALLOWED_ORIGINS`                | Unset                                               | Comma-separated allowed website origins for the Convex API.                     |
+| `PORT`                           | `4444`                                              | Local Express HTTP port.                                                        |
+| `HOST`                           | `localhost` in development; `0.0.0.0` in production | Local Express listening interface.                                              |
 
-Generation runs in a worker. Every generated board has exactly one solution. Up to size 16, a clue is removed only when exhaustive search proves uniqueness; a search budget cutoff rejects the removal. Above 16, the generator removes random clues, then restores clues until naked and hidden singles prove a complete solution. Each such deduction is required in every completion, which proves uniqueness. A separate check rejects a puzzle unless at least a quarter of its empty cells remain unresolved after exhausting naked singles. This prevents simple candidate filtering from solving the whole board. A hidden single requires comparing candidate locations across a row, column or box even though its cell has multiple candidates.
+Personal keys stay in the current tab's memory and are sent directly to OpenRouter. Reloading or disconnecting clears them; failed personal requests never fall back to the shared key. The shared key is used only by the server. Keep credentials in `.env` locally and in secret environment variables on the host; never use a `VITE_` prefix for secrets.
 
-Large size does not imply high logical difficulty. These puzzles require hidden singles but do not require search or advanced solving techniques. Difficulty controls the initial removal density, not a rated human solving technique or a guaranteed final clue count. The completed board and uniqueness deductions stay inside generation and are never sent to Jev.
+The daily budget uses provider-reported costs, so concurrent or interrupted requests can exceed it. Set a spending limit on the OpenRouter key as well.
 
-The canvas fits the board and zooms up to 16×. Hold the middle mouse button and drag to pan. Left-button and touch dragging also work. The wheel or pinch zooms around the pointer; double-click or the percentage button fits the board. Hovering previews a cell until a click pins its probabilities. Clicking another cell replaces the selection. Dense boards use marks at low zoom and show numbers when enlarged.
+## How it works
 
-## Batches
+A browser worker generates the puzzle and verifies uniqueness. Jev receives the puzzle context and chooses values for a batch of empty cells. The application validates every returned choice, applies legal moves, and backtracks when it detects a dead end. The generator's solution is never sent to the model, and every new placement during solving comes from a model choice.
 
-Settings allow up to 128 cells per request. Targets are the first empty cells in board order, without preferring forced cells or excluding cells that share a row, column or box. A limit of 64 covers every empty cell on a 9 by 9 puzzle with at most 64 blanks. Each question offers every number from 1 to the board size, including locally invalid and previously rejected values, so Jev returns a complete distribution. Large requests may reduce the cell count to fit the context budget; the request heading marks that reduction.
+This is an experiment, not a guaranteed solver or a model benchmark. Larger boards can be slow or remain unfinished. Difficulty changes clue density rather than assigning a human difficulty rating. Reported probabilities describe individual choices, not the probability that the entire board is correct.
 
-The app checks every returned answer, applies legal placements and records rejection reasons for invalid or conflicting choices. It never stops processing the response at the first contradiction. The export also preserves the complete proposed board before validation. A correct complete guess can finish the puzzle in one request.
+Select a cell to pin its probabilities. Drag to pan, scroll or pinch to zoom, and double-click to fit the board. Arrow keys step through recorded batches; Space starts or pauses playback, or starts solving when no history exists.
 
-Empty candidate lists and two forced copies of a digit in one unit trigger rollback before another request. A failed branch removes moves back to the last speculative placement; it never fills an alternative itself. Failed choices cannot be applied again while their earlier assumptions hold, but remain in Jev's probability distribution. The request includes feedback asking Jev to avoid those choices. Changing the assumptions releases the restriction. Exhausting all legal candidates rolls back an earlier assumption. Every new value comes from a model choice. A batch with no valid placements pauses the run.
+## Development
 
-Space starts recorded playback from the beginning or pauses it. Arrow keys move between recorded batches. Playback stops at the last saved batch without issuing new requests, including for unfinished runs. With no saved batches, Space starts solving. Shortcuts ignore text inputs and the settings dialog.
+```sh
+pnpm check       # Formatting, lint, and type checks
+pnpm test        # Cloud API and accounting tests
+pnpm build       # TypeScript checks and production client build
+pnpm start       # Serve the built client and API
+```
 
-Recorded navigation shows the selected board immediately. Pink marks additions; crossed-out amber digits mark removals or replacements. During a live request, the canvas keeps the last committed snapshot and updates once when the response applies. Only the background tint animates, with a short cancellable transition. Model suggestions that were not applied never appear as placed digits. The probabilities section replaces placement cards. Click a board cell to pin its probabilities. Hovering other cells does not replace a pinned selection. Dragging, zooming and pinch gestures do not select cells. Each number has its reported probability and a proportional fill; the model's choice has a rose border. Conflicting and rejected values stay visible with a strike through the number. Animation speed includes an instant option. History replays saved batches without new model calls. Payload shows the exact OpenRouter JSON request and response. Export includes all board states, placements, metadata, tokens and reported costs. The bottom bar totals the entire run, even while replaying an earlier batch. The probabilities section has no separate token or cost footer. Raw requests, responses and failures are appended to `logs/requests.jsonl`, with request and run IDs and no authorization headers. These logs stay local and are ignored by Git. Totals use provider-reported usage; an aborted request can incur an unreported charge.
+Focused verification scripts live in [`scripts/`](scripts/). For example:
 
-Mean p is the arithmetic mean of selected-value probabilities; min p is the lowest. The histogram groups those probabilities into ten bins. None is a joint probability that the whole batch is correct. The probabilities section shows all 1–N values for the selected cell, including conflicting values. Crossed-out digits identify local conflicts or known failed choices without changing their reported probabilities. Cells outside the selected batch show no response, never invented zero probabilities.
+```sh
+pnpm exec tsx scripts/verify-batches.ts
+pnpm exec tsx scripts/verify-model-choices.ts
+pnpm exec tsx scripts/verify-replay.ts
+```
 
-For boards whose serialized state exceeds 16,000 characters, requests use the target cells' rows, columns and boxes instead of the full board. These batches are marked `local context`. Large boards also reduce target count automatically. A 48,000-character request budget adds a conservative context guard; it is an estimate, not a tokenizer. Provider limits can still reject a request.
+| Location                                                | Responsibility                                           |
+| ------------------------------------------------------- | -------------------------------------------------------- |
+| `src/App.tsx`, `src/BoardCanvas.tsx`                    | Run controls, playback, and board rendering.             |
+| `src/sudoku.ts`, `src/generateLarge.ts`                 | Puzzle generation, validation, and backtracking.         |
+| `src/protocol.ts`, `src/jev.ts`                         | Model payloads, response parsing, and request transport. |
+| `server.ts`, `server/usage.ts`                          | Shared API access, limits, and usage accounting.         |
+| `convex/http.ts`, `convex/usage.ts`, `convex/schema.ts` | Production API and persistent accounting.                |
 
-The 64-cell side limit bounds browser memory. Jev also limits each Choice to 255 options. Large puzzles can still be slow or fail; a valid partial board does not prove that its current branch is solvable.
+## Deployment
 
-Settings contain the OpenRouter key and batch size. Rate limits during auto-run wait before retrying, respecting Retry-After with increasing delays and at most five consecutive retries. Other errors stop the run. Pause aborts the client request, though the provider may already have billed it.
+Production uses **Vercel** for the frontend and **Convex** for the API and database. Vercel forwards `/api/*` to Convex; the shared OpenRouter key stays in Convex. Usage counters, daily spending, and request limits persist across deployments. The cloud database stores accounting metadata, not raw puzzle payloads or model responses.
 
-Jev supplies choices and probabilities, not written reasoning.
+Deployments are **manual**. Pushing a commit does not publish it.
 
-## Server and shared access
+1. Push your branch to this repository.
+2. Open [Actions → Deploy production](https://github.com/imprfct-code/jevdokku/actions/workflows/deploy.yml).
+3. Click **Run workflow**, select the branch, and confirm.
 
-`pnpm run build && pnpm start` serves the client and API from the same Express process. Production binds to `0.0.0.0`; set `HOST` and `PORT` as needed. Serve the public site over HTTPS. This change prepares local hosting; it does not publish the app.
+The workflow checks and tests the selected revision, builds the frontend, deploys Convex, and publishes Vercel. Runs share a production concurrency group. Every branch targets the same website and database; keep backend/schema changes compatible with the currently live frontend. The selected branch must contain the workflow. GitHub's native Vercel auto-deployment is disabled in `vercel.json`.
 
-`PUBLIC_DAILY_BUDGET_USD` defaults to 1. Set it to 0 to disable shared access. The server stops starting shared requests after reported daily spending reaches that amount. In-flight requests and unreported provider charges can exceed it, so use the provider's key spending limit for a billing cap. Personal requests do not consume the shared budget. Shared access allows at most two simultaneous upstream requests and defaults to 60 requests per minute per IP with `PUBLIC_REQUESTS_PER_MINUTE`. Behind a reverse proxy, Express sees the proxy IP unless a trusted proxy is configured for that deployment; the default rate limit then applies across its visitors. These limits bound casual use, not all automated abuse.
+GitHub Actions uses repository secrets `VERCEL_TOKEN` and `CONVEX_DEPLOY_KEY`, plus variables `VERCEL_ORG_ID` and `VERCEL_PROJECT_ID`. Application secrets and limits belong in the Convex production environment. Keep production keys out of `.env.example`, source code, and client build variables.
 
-`/api/stats` exposes aggregate server request counts, tokens and reported costs. Info shows those counters below a short note about the experiment. Direct personal-key requests appear in the current run totals and exports, but never reach the server ledger. The server rebuilds them from `logs/requests.jsonl` on startup; retain that directory on a persistent volume. Run counts include partial runs and historical local checks, not just solved boards. Statistics currently support one server process. The server never receives personal keys or personal request payloads. Shared request payloads and model responses enter its log, so keep the log directory private.
+For local backend development, `pnpm dev:convex` selects a separate development deployment. `pnpm dev` continues to run the standalone Express backend with local accounting in the Git-ignored `logs/` directory. Production logs are not copied into local development or vice versa.
 
-## Validation
+## Credits
 
-Generation, box constraints, request sizing and batch application were checked at sizes 2, 4, 6, 7, 9, 12, 16, 25, 36, 64, 100, 128 and 256. Authenticated Jev runs solved 4×4 and 9×9 test boards. Individual live batches were checked at 25×25 and 128×128; those entire large boards were not solved during validation.
-
-References: [Pixel](https://pixel.imprfct.dev/), [Imperfect Log](https://log.imprfct.dev/feed), [Jev](https://openrouter.ai/typesafe/jev-1.13), [TypeSafe Choice](https://docs.typesafe.ai/primitives/choice).
+Model: [Jev](https://openrouter.ai/typesafe/jev-1.13) and [TypeSafe Choice](https://docs.typesafe.ai/primitives/choice). Visual inspiration: [Pixel](https://pixel.imprfct.dev/) and [Imperfect Log](https://log.imprfct.dev/feed). Typography: Geist Mono and Geist Pixel.

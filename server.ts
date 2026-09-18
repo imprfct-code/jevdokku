@@ -2,7 +2,7 @@ import { appendFile, mkdir } from 'node:fs/promises'
 import { randomUUID } from 'node:crypto'
 import express from 'express'
 import { createServer, loadEnv } from 'vite-plus'
-import { candidateMap, hasDeadEnd, MAX_BATCH_SIZE, validBoard, validSize } from './src/sudoku.ts'
+import { parseDecisionInput } from './src/requestValidation.ts'
 import { makeRequest, readDecisions, type JevResponse } from './src/protocol.ts'
 import { loadUsage } from './server/usage.ts'
 
@@ -10,8 +10,12 @@ const env = { ...loadEnv(process.env.NODE_ENV || 'development', process.cwd(), '
 const serverKey = env.OPENROUTER_API_KEY || env['OPEN-ROUTER-API-KEY']
 await mkdir('logs', { recursive: true })
 const usage = await loadUsage('logs/requests.jsonl')
-const sharedDailyBudget = Math.max(0, Number(env.PUBLIC_DAILY_BUDGET_USD ?? 1) || 0)
-const sharedRateLimit = Math.max(1, Number(env.PUBLIC_REQUESTS_PER_MINUTE ?? 60) || 60)
+const sharedDailyBudget = Math.max(0, Number(env.PUBLIC_DAILY_BUDGET_USD ?? 5) || 0)
+const sharedRateLimit = Math.max(1, Number(env.PUBLIC_REQUESTS_PER_MINUTE ?? 600) || 600)
+const sharedConcurrency = Math.max(
+  1,
+  Math.min(100, Number(env.PUBLIC_MAX_CONCURRENT_REQUESTS ?? 20) || 20),
+)
 const visitors = new Map<string, { started: number; requests: number }>()
 let sharedInFlight = 0
 async function record(entry: Record<string, unknown>) {
@@ -51,58 +55,16 @@ app.get('/api/config', (_req, res) =>
 app.get('/api/stats', (_req, res) => res.json(usage.snapshot()))
 app.post('/api/decide', async (req, res) => {
   res.setHeader('Cache-Control', 'no-store')
-  const { board, size, targets, rejectedChoices = [] } = req.body ?? {}
-  if (
-    !validSize(size) ||
-    !Array.isArray(board) ||
-    board.length !== size * size ||
-    board.some((value) => !Number.isInteger(value) || value < 0 || value > size) ||
-    !Array.isArray(targets) ||
-    !targets.length ||
-    targets.length > MAX_BATCH_SIZE ||
-    new Set(targets).size !== targets.length ||
-    targets.some(
-      (index) => !Number.isInteger(index) || index < 0 || index >= board.length || board[index],
-    )
-  ) {
-    res.status(400).json({ error: `Invalid board or batch. Use 1–${MAX_BATCH_SIZE} empty cells.` })
+  let input: ReturnType<typeof parseDecisionInput>
+  try {
+    if (req.get('authorization'))
+      throw new Error('Personal keys connect directly to OpenRouter from the browser.')
+    input = parseDecisionInput(req.body)
+  } catch (error) {
+    res.status(400).json({ error: (error as Error).message })
     return
   }
-  if (!validBoard(board, size)) {
-    res.status(400).json({ error: 'Board contains conflicting values.' })
-    return
-  }
-  const options = candidateMap(board, size)
-  if (
-    !Array.isArray(rejectedChoices) ||
-    rejectedChoices.some(
-      (item) =>
-        !item ||
-        !Number.isInteger(item.index) ||
-        item.index < 0 ||
-        item.index >= board.length ||
-        board[item.index] ||
-        !Number.isInteger(item.choice) ||
-        item.choice < 1 ||
-        item.choice > size,
-    )
-  ) {
-    res.status(400).json({ error: 'Invalid rejected choices.' })
-    return
-  }
-  for (const { index, choice } of rejectedChoices) options.get(index)?.delete(choice)
-  if (hasDeadEnd(options, size)) {
-    res
-      .status(400)
-      .json({ error: 'The board has a dead end. Roll back before requesting another batch.' })
-    return
-  }
-  if (req.body.keyMode === 'personal' || req.body.apiKey || req.get('authorization')) {
-    res
-      .status(400)
-      .json({ error: 'Personal keys connect directly to OpenRouter from the browser.' })
-    return
-  }
+  const { board, size, targets, rejectedChoices, runId } = input
   const key = serverKey
   if (!key) {
     res.status(401).json({ error: 'Add an OpenRouter key in .env or settings.' })
@@ -119,7 +81,7 @@ app.post('/api/decide', async (req, res) => {
     for (const [ip, visitor] of visitors) if (now - visitor.started >= 60_000) visitors.delete(ip)
     const ip = req.ip || 'unknown'
     const visitor = visitors.get(ip) ?? { started: now, requests: 0 }
-    if (visitor.requests >= sharedRateLimit || sharedInFlight >= 2) {
+    if (visitor.requests >= sharedRateLimit || sharedInFlight >= sharedConcurrency) {
       res.status(429).json({
         error: 'Shared access is busy. Retry shortly or connect your own key.',
         retryAfter: 10,
@@ -131,10 +93,6 @@ app.post('/api/decide', async (req, res) => {
     sharedInFlight++
   }
   const requestId = randomUUID()
-  const runId =
-    typeof req.body.runId === 'string' && /^[a-z0-9-]{1,64}$/i.test(req.body.runId)
-      ? req.body.runId
-      : null
   const controller = new AbortController()
   const timeout = setTimeout(() => controller.abort(), 60_000)
   res.on('close', () => {

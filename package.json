@@ -9,11 +9,15 @@
     "lint": "vp lint",
     "preview": "NODE_ENV=production tsx server.ts",
     "start": "NODE_ENV=production tsx server.ts",
-    "check": "vp check"
+    "check": "vp check",
+    "test": "vp test run",
+    "dev:convex": "convex dev",
+    "deploy:convex": "convex deploy"
   },
   "dependencies": {
     "@fontsource-variable/geist-mono": "^5.3.0",
     "@fontsource/geist-pixel": "^5.3.0",
+    "convex": "^1.46.0",
     "express": "^5.2.1",
     "lucide-react": "^1.47.0",
     "react": "^19.2.8",
@@ -25,10 +29,14 @@
     "@types/react": "^19.2.18",
     "@types/react-dom": "^19.2.7",
     "@vitejs/plugin-react": "^6.1.1",
+    "convex-test": "^0.0.59",
     "tsx": "^4.23.13",
     "typescript": "~6.0.2",
     "vite": "catalog:",
     "vite-plus": "catalog:"
+  },
+  "engines": {
+    "node": ">=24.11.0 <25"
   },
   "packageManager": "pnpm@10.30.1"
 }

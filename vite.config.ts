@@ -2,8 +2,9 @@ import react from '@vitejs/plugin-react'
 import { defineConfig } from 'vite-plus'
 
 export default defineConfig({
-  fmt: { semi: false, singleQuote: true },
+  fmt: { semi: false, singleQuote: true, ignorePatterns: ['convex/_generated/**'] },
   lint: {
+    ignorePatterns: ['convex/_generated/**'],
     plugins: ['react', 'typescript', 'oxc'],
     rules: {
       'react/rules-of-hooks': 'error',
