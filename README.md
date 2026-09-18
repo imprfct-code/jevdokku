@@ -95,7 +95,7 @@ Deployments are **manual**. Pushing a commit does not publish it.
 2. Open [Actions → Deploy production](https://github.com/imprfct-code/jevdokku/actions/workflows/deploy.yml).
 3. Click **Run workflow**, select the branch, and confirm.
 
-The workflow checks and tests the selected revision, builds the frontend, deploys Convex, and publishes Vercel. Runs share a production concurrency group. Every branch targets the same website and database; keep backend/schema changes compatible with the currently live frontend. The selected branch must contain the workflow. GitHub's native Vercel auto-deployment is disabled in `vercel.json`.
+The workflow checks and tests the selected revision, builds the frontend, deploys Convex, and publishes Vercel. Runs share a production concurrency group. Every branch targets the same website and database; keep backend/schema changes compatible with the currently live frontend. The selected branch must contain the workflow. The Vercel Git integration is disconnected, and auto-deployment is also disabled in `vercel.json`.
 
 GitHub Actions uses repository secrets `VERCEL_TOKEN` and `CONVEX_DEPLOY_KEY`, plus variables `VERCEL_ORG_ID` and `VERCEL_PROJECT_ID`. Application secrets and limits belong in the Convex production environment. Keep production keys out of `.env.example`, source code, and client build variables.
 
