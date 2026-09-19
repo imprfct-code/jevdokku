@@ -23,8 +23,10 @@ export async function askJev(
       method: 'POST',
       headers: { 'Content-Type': 'application/json' },
       body: JSON.stringify({ board, size, targets, runId, rejectedChoices }),
-      signal,
+      signal: AbortSignal.any([signal, AbortSignal.timeout(70_000)]),
     })
+    if (!response.headers.get('content-type')?.includes('application/json'))
+      throw new Error(`Shared service is unavailable (${response.status}). Retry shortly.`)
     const result = (await response.json()) as Batch & { error?: string; retryAfter?: number }
     if (response.status === 429)
       throw new RateLimitError(result.error || 'Rate limit reached.', result.retryAfter ?? 10)

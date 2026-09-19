@@ -1,72 +1,92 @@
-import { readFile, readdir } from 'node:fs/promises'
-import { setTimeout } from 'node:timers/promises'
+import { cp, mkdir, readFile, rm, writeFile } from 'node:fs/promises'
+import { resolve } from 'node:path'
+import { createDeployment } from '@vercel/client'
 
 const { VERCEL_TOKEN, VERCEL_ORG_ID, VERCEL_PROJECT_ID } = process.env
 if (!VERCEL_TOKEN || !VERCEL_ORG_ID || !VERCEL_PROJECT_ID) {
   throw new Error('Missing Vercel deployment credentials.')
 }
-
+const domain = 'jev.imprfct.dev'
 async function api(path, body) {
   const response = await fetch(`https://api.vercel.com${path}?teamId=${VERCEL_ORG_ID}`, {
     method: body ? 'POST' : 'GET',
-    headers: {
-      Authorization: `Bearer ${VERCEL_TOKEN}`,
-      'Content-Type': 'application/json',
-    },
+    headers: { Authorization: `Bearer ${VERCEL_TOKEN}`, 'Content-Type': 'application/json' },
     body: body ? JSON.stringify(body) : undefined,
     signal: AbortSignal.timeout(60_000),
   })
   const result = await response.json()
-  if (!response.ok) {
+  if (!response.ok)
     throw new Error(`Vercel ${response.status}: ${result.error?.message ?? 'Request failed'}`)
-  }
   return result
 }
 
-const paths = await readdir('dist', { recursive: true, withFileTypes: true })
-const files = await Promise.all(
-  paths
-    .filter((entry) => entry.isFile())
-    .map(async (entry) => {
-      const path = `${entry.parentPath}/${entry.name}`
-      return {
-        file: path.slice('dist/'.length),
-        data: (await readFile(path)).toString('base64'),
-        encoding: 'base64',
-      }
-    }),
+// Upload Build Output API files directly; no remote build queue or CLI team lookup.
+const output = resolve('.vercel/output')
+await rm(output, { recursive: true, force: true })
+await mkdir(output, { recursive: true })
+await cp('dist', `${output}/static`, { recursive: true })
+const config = JSON.parse(await readFile('vercel.json', 'utf8'))
+const apiDestination = config.rewrites.find((rule) => rule.source === '/api/:path*').destination
+await writeFile(
+  `${output}/config.json`,
+  JSON.stringify({
+    version: 3,
+    routes: [
+      { src: '^/api/(.*)$', dest: apiDestination.replace(':path*', '$1') },
+      { handle: 'filesystem' },
+    ],
+  }),
 )
-const { rewrites } = JSON.parse(await readFile('vercel.json', 'utf8'))
-const settings = { framework: null, buildCommand: '', installCommand: '', outputDirectory: '.' }
-files.push({
-  file: 'vercel.json',
-  data: JSON.stringify({ ...settings, rewrites }),
-  encoding: 'utf-8',
-})
-
-// The CLI's team lookup rejects project-scoped tokens: vercel/vercel#17506.
-const deployment = await api('/v13/deployments', {
-  name: 'jevdokku',
-  project: VERCEL_PROJECT_ID,
-  target: 'production',
-  files,
-  projectSettings: settings,
-  meta: {
-    githubCommitSha: process.env.GITHUB_SHA ?? '',
-    githubCommitRef: process.env.GITHUB_REF_NAME ?? '',
+const previous = await api(`/v4/aliases/${domain}`)
+let deployment
+for await (const event of createDeployment(
+  {
+    token: VERCEL_TOKEN,
+    teamId: VERCEL_ORG_ID,
+    path: process.cwd(),
+    prebuilt: true,
+    vercelOutputDir: output,
   },
-})
-console.log(`Deployment: https://${deployment.url}`)
-const deadline = Date.now() + 10 * 60_000
-while (true) {
-  const status = await api(`/v13/deployments/${deployment.id}`)
-  if (status.readyState === 'READY') break
-  if (['ERROR', 'CANCELED'].includes(status.readyState)) {
-    throw new Error(`Deployment ${status.readyState}: ${status.errorMessage ?? deployment.id}`)
+  {
+    name: 'jevdokku',
+    project: VERCEL_PROJECT_ID,
+    target: 'production',
+    autoAssignCustomDomains: false,
+    meta: {
+      githubCommitSha: process.env.GITHUB_SHA ?? '',
+      githubCommitRef: process.env.GITHUB_REF_NAME ?? '',
+    },
+  },
+)) {
+  if (event.type === 'error') throw new Error(event.payload.message)
+  if (event.type === 'created') console.log(`Deployment: https://${event.payload.url}`)
+  if (event.type === 'ready') {
+    deployment = event.payload
+    break
   }
-  if (Date.now() > deadline) throw new Error(`Deployment timed out: ${deployment.id}`)
-  console.log(`Vercel: ${status.readyState}`)
-  await setTimeout(5000)
 }
-await api(`/v2/deployments/${deployment.id}/aliases`, { alias: 'jev.imprfct.dev' })
-console.log('Published https://jev.imprfct.dev')
+if (!deployment) throw new Error('Vercel did not return a ready deployment.')
+await api(`/v2/deployments/${deployment.id}/aliases`, { alias: domain })
+try {
+  const response = await fetch(`https://${domain}/`, {
+    cache: 'no-store',
+    signal: AbortSignal.timeout(15_000),
+  })
+  if (!response.ok || !(await response.text()).includes('<div id="root">'))
+    throw new Error('Homepage check failed.')
+  for (const path of ['config', 'stats']) {
+    const response = await fetch(`https://${domain}/api/${path}`, {
+      cache: 'no-store',
+      signal: AbortSignal.timeout(15_000),
+    })
+    if (!response.ok) throw new Error(`API ${path}: ${response.status}`)
+    const data = await response.json()
+    if (path === 'config' ? data.hasKey !== true : typeof data.requests !== 'number')
+      throw new Error(`Invalid API ${path} response.`)
+  }
+} catch (error) {
+  const previousId = previous.deploymentId ?? previous.deployment?.id
+  if (previousId) await api(`/v2/deployments/${previousId}/aliases`, { alias: domain })
+  throw error
+}
+console.log(`Published and verified https://${domain}`)

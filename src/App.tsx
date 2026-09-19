@@ -128,14 +128,26 @@ function App() {
   const shape = boxShape(size)
 
   useEffect(() => {
-    fetch('/api/config')
-      .then((response) => response.json())
-      .then((data) => {
-        setServerKey(data.hasKey)
-      })
-      .catch(() => setError('Cannot load server settings.'))
-      .finally(() => setConfigLoaded(true))
+    const configController = new AbortController()
+    const refreshConfig = async () => {
+      try {
+        const response = await fetch('/api/config', {
+          signal: AbortSignal.any([configController.signal, AbortSignal.timeout(10_000)]),
+        })
+        if (!response.ok) throw new Error('Cannot load server settings.')
+        const data = await response.json()
+        if (!configController.signal.aborted) setServerKey(data.hasKey === true)
+      } catch {
+        if (!configController.signal.aborted) setServerKey(false)
+      } finally {
+        if (!configController.signal.aborted) setConfigLoaded(true)
+      }
+    }
+    void refreshConfig()
+    const configTimer = window.setInterval(() => void refreshConfig(), 15_000)
     return () => {
+      configController.abort()
+      window.clearInterval(configTimer)
       controller.current?.abort()
       worker.current?.terminate()
     }

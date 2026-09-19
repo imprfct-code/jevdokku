@@ -18,7 +18,9 @@ export default function Info({ onClose }: { onClose: () => void }) {
     const controller = new AbortController()
     async function refresh() {
       try {
-        const response = await fetch('/api/stats', { signal: controller.signal })
+        const response = await fetch('/api/stats', {
+          signal: AbortSignal.any([controller.signal, AbortSignal.timeout(10_000)]),
+        })
         if (!response.ok) throw new Error('Stats unavailable')
         setStats(await response.json())
         setUnavailable(false)
